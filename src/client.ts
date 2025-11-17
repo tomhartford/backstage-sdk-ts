@@ -1,10 +1,25 @@
 /**
  * Backstage API Client
  * 
- * Wrapper around the auto-generated client with convenience methods
+ * Auto-generated wrapper with token management and convenience methods
+ * Generated from OpenAPI specification
  */
 
-import fetch from 'cross-fetch';
+import type { components } from './generated/types';
+
+// Extract schema types
+type LoginRequest = components['schemas']['LoginRequest'];
+type LoginResponse = components['schemas']['LoginResponse'];
+type RefreshTokenRequest = components['schemas']['RefreshTokenRequest'];
+type RefreshTokenResponse = components['schemas']['RefreshTokenResponse'];
+type RedeemInvitationRequest = components['schemas']['RedeemInvitationRequest'];
+type RedeemInvitationResponse = components['schemas']['RedeemInvitationResponse'];
+type FederateRequest = components['schemas']['FederateRequest'];
+type GetUserMeResponse = components['schemas']['GetUserMeResponse'];
+type GetUserOrganisationsResponse = components['schemas']['GetUserOrganisationsResponse'];
+type GetOrganisationResponse = components['schemas']['GetOrganisationResponse'];
+type UpdateOrganisationRequest = components['schemas']['UpdateOrganisationRequest'];
+type UpdateOrganisationResponse = components['schemas']['UpdateOrganisationResponse'];
 
 export interface BackstageClientConfig {
   baseUrl: string;
@@ -66,12 +81,18 @@ export class BackstageClient {
 
   /**
    * Make an authenticated API request
+   * - Adds /v1 prefix for API versioning
+   * - Injects Authorization header if token available
+   * - Automatically refreshes token on 401
+   * - Unwraps JSend format responses
    */
   private async request<T>(
     path: string,
     options: RequestInit = {}
   ): Promise<T> {
-    const url = `${this.baseUrl}${path}`;
+    // Ensure path starts with /v1 for API versioning
+    const versionedPath = path.startsWith('/v1') ? path : `/v1${path}`;
+    const url = `${this.baseUrl}${versionedPath}`;
     
     const headers: Record<string, string> = {
       'Content-Type': 'application/json',
@@ -91,12 +112,29 @@ export class BackstageClient {
     // Handle token refresh on 401
     if (response.status === 401 && this.refreshToken && !path.includes('/auth/refresh')) {
       try {
-        const refreshResult = await this.auth.refresh({ refreshToken: this.refreshToken });
-        this.accessToken = refreshResult.accessToken;
-        this.refreshToken = refreshResult.refreshToken;
+        // Make refresh request directly to avoid circular dependency
+        const refreshResponse = await fetch(`${this.baseUrl}/v1/auth/refresh`, {
+          method: 'POST',
+          headers: {
+            'Content-Type': 'application/json',
+          },
+          body: JSON.stringify({ refreshToken: this.refreshToken }),
+        });
+        
+        if (!refreshResponse.ok) {
+          throw new Error('Token refresh failed');
+        }
+        
+        const refreshJson = await refreshResponse.json();
+        const refreshData = refreshJson.status === 'success' && refreshJson.data !== undefined 
+          ? refreshJson.data 
+          : refreshJson;
+        
+        this.accessToken = refreshData.accessToken;
+        this.refreshToken = refreshData.refreshToken;
         
         if (this.onTokenRefresh) {
-          await this.onTokenRefresh(refreshResult.accessToken, refreshResult.refreshToken);
+          await this.onTokenRefresh(refreshData.accessToken, refreshData.refreshToken);
         }
 
         // Retry original request with new token
@@ -119,144 +157,145 @@ export class BackstageClient {
       throw new Error(error.error || 'Request failed');
     }
 
-    return response.json();
+    const json = await response.json();
+    
+    // Unwrap JSend format if present
+    if (json.status === 'success' && json.data !== undefined) {
+      return json.data as T;
+    }
+    
+    return json as T;
   }
 
   /**
    * Authentication methods
    */
-  auth = {
-    /**
-     * Login with email and password
-     */
-    login: async (request: { email: string; password: string }) => {
-      const response = await this.request<{
-        accessToken: string;
-        refreshToken: string;
-        user: any;
-      }>('/auth/login', {
-        method: 'POST',
-        body: JSON.stringify(request),
-      });
+  authentication = {
+  /**
+   * User login
+   * Authenticate a user with email and password, returns access and refresh tokens
+   */
+  login: async (request: LoginRequest) => {
+    const response = await this.request<LoginResponse>(`/auth/login`, {
+      method: 'POST',
+      body: JSON.stringify(request)
+    });
 
-      this.setAccessToken(response.accessToken);
-      this.setRefreshToken(response.refreshToken);
-      return response;
-    },
+    this.setAccessToken(response.accessToken);
+    this.setRefreshToken(response.refreshToken);
 
-    /**
-     * Refresh the access token
-     */
-    refresh: async (request: { refreshToken: string }) => {
-      const response = await this.request<{
-        accessToken: string;
-        refreshToken: string;
-      }>('/auth/refresh', {
-        method: 'POST',
-        body: JSON.stringify(request),
-      });
+    return response;
+  },
 
-      this.setAccessToken(response.accessToken);
-      this.setRefreshToken(response.refreshToken);
-      
-      if (this.onTokenRefresh) {
-        await this.onTokenRefresh(response.accessToken, response.refreshToken);
-      }
-      
-      return response;
-    },
+  /**
+   * Refresh access token
+   * Exchange a refresh token for a new access token and refresh token
+   */
+  refresh: async (request: RefreshTokenRequest) => {
+    const response = await this.request<RefreshTokenResponse>(`/auth/refresh`, {
+      method: 'POST',
+      body: JSON.stringify(request)
+    });
 
-    /**
-     * Redeem an invitation code
-     */
-    redeemInvitation: async (request: { code: string; password: string }) => {
-      const response = await this.request<{
-        accessToken: string;
-        refreshToken: string;
-        user: any;
-      }>('/auth/redeem', {
-        method: 'POST',
-        body: JSON.stringify(request),
-      });
+    this.setAccessToken(response.accessToken);
+    this.setRefreshToken(response.refreshToken);
 
-      this.setAccessToken(response.accessToken);
-      this.setRefreshToken(response.refreshToken);
-      return response;
-    },
+    if (this.onTokenRefresh) {
+      await this.onTokenRefresh(response.accessToken, response.refreshToken);
+    }
 
-    /**
-     * Federate user to organisation via Stagedoor JWT
-     */
-    federate: async (request: { token: string }) => {
-      const response = await this.request<{
-        accessToken: string;
-        refreshToken: string;
-        user: any;
-      }>('/auth/federate', {
-        method: 'POST',
-        body: JSON.stringify(request),
-      });
+    return response;
+  },
 
-      this.setAccessToken(response.accessToken);
-      this.setRefreshToken(response.refreshToken);
-      return response;
-    },
+  /**
+   * Redeem invitation
+   * Redeem an invitation code and set up a new user account
+   */
+  redeem: async (request: RedeemInvitationRequest) => {
+    const response = await this.request<RedeemInvitationResponse>(`/auth/redeem`, {
+      method: 'POST',
+      body: JSON.stringify(request)
+    });
+
+    this.setAccessToken(response.accessToken);
+    this.setRefreshToken(response.refreshToken);
+
+    return response;
+  },
+
+  /**
+   * Federate user to organisation
+   * Exchange a Stagedoor JWT token for API access and refresh tokens
+   */
+  federate: async (request: FederateRequest) => {
+    const response = await this.request<LoginResponse>(`/auth/federate`, {
+      method: 'POST',
+      body: JSON.stringify(request)
+    });
+
+    this.setAccessToken(response.accessToken);
+    this.setRefreshToken(response.refreshToken);
+
+    return response;
+  }
   };
 
   /**
-   * User methods
+   * Users methods
    */
   users = {
-    /**
-     * Get current user
-     */
-    getMe: async () => {
-      const response = await this.request<{ user: any }>('/users/me', {
-        method: 'GET',
-      });
-      return response.user;
-    },
+  /**
+   * Get current user
+   * Get the currently authenticated user information
+   */
+  getMe: async () => {
+    const response = await this.request<GetUserMeResponse>(`/users/me`, {
+      method: 'GET'
+    });
 
-    /**
-     * Get user organisations
-     */
-    getMyOrganisations: async () => {
-      const response = await this.request<{ organisations: any[] }>('/users/me/organisations', {
-        method: 'GET',
-      });
-      return response.organisations;
-    },
+    return response.user;
+  },
+
+  /**
+   * Get user organisations
+   * Get all organisations the current user is a member of
+   */
+  getMeOrganisations: async () => {
+    const response = await this.request<GetUserOrganisationsResponse>(`/users/me/organisations`, {
+      method: 'GET'
+    });
+
+    return response.organisations;
+  }
   };
 
   /**
-   * Organisation methods
+   * Organizations methods
    */
   organisations = {
-    /**
-     * Get organisation by ID
-     */
-    get: async (id: string) => {
-      const response = await this.request<{ organisation: any }>(`/organisations/${id}`, {
-        method: 'GET',
-      });
-      return response.organisation;
-    },
+  /**
+   * Get organisation
+   * Get organisation details including branding information
+   */
+  get: async (id: string) => {
+    const response = await this.request<GetOrganisationResponse>(`/organisations/${id}`, {
+      method: 'GET'
+    });
 
-    /**
-     * Update organisation
-     */
-    update: async (id: string, data: {
-      name?: string;
-      primaryColor?: string;
-      secondaryColor?: string;
-      logoUrl?: string;
-      metadata?: Record<string, any>;
-    }) => {
-      const response = await this.request<{ organisation: any }>(`/organisations/${id}`, {
-        method: 'PATCH',
-        body: JSON.stringify(data),
-      });
-      return response.organisation;
-    },
+    return response.organisation;
+  },
+
+  /**
+   * Update organisation
+   * Update organisation details and branding (owner permission required)
+   */
+  update: async (id: string, request: UpdateOrganisationRequest) => {
+    const response = await this.request<UpdateOrganisationResponse>(`/organisations/${id}`, {
+      method: 'PATCH',
+      body: JSON.stringify(request)
+    });
+
+    return response.organisation;
+  }
   };
 }
